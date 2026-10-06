@@ -1,0 +1,68 @@
+syntax = "proto3";
+package dcsm;
+
+service FileGateway {
+    rpc Upload (UploadRequest) returns (OperationReply);
+    rpc Download (DownloadRequest) returns (DownloadReply);
+    rpc List (ListRequest) returns (ListReply);
+    rpc Delete (DeleteRequest) returns (OperationReply);
+}
+
+service Storage {
+    rpc Store (UploadRequest) returns (OperationReply);
+    rpc Fetch (DownloadRequest) returns (DownloadReply);
+    rpc Enumerate (ListRequest) returns (ListReply);
+    rpc Remove (DeleteRequest) returns (OperationReply);
+    rpc Replicate (UploadRequest) returns (OperationReply);
+}
+
+message UploadRequest {
+    string file_id = 1;
+    string filename = 2;
+    string security_label = 3; 
+    bytes content = 4;
+    string sha256 = 5;
+    string jwt = 6;
+}
+
+message DownloadRequest { 
+    string file_id = 1; 
+    string jwt = 2; 
+}
+
+message DeleteRequest { 
+    string file_id = 1; 
+    string jwt = 2; 
+}
+
+message ListRequest { 
+    string jwt = 1; 
+}
+
+message OperationReply {
+    bool success = 1;
+    string message = 2;
+    string file_id = 3;
+    string sha256 = 4;
+}
+
+message DownloadReply {
+    bool success = 1;
+    string message = 2;
+    string filename = 3;
+    string security_label = 4;
+    bytes content = 5;
+    string sha256 = 6;
+}
+
+message FileInfo {
+    string file_id = 1;
+    string filename = 2;
+    string security_label = 3;
+    string sha256 = 4;
+}
+
+message ListReply { 
+    repeated FileInfo files = 1; 
+    string message = 2; 
+}
