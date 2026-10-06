@@ -1,0 +1,55 @@
+services:
+  gateway:
+    image: gateway:latest
+    ports:
+      - "50051:50051"
+    networks:
+      dcsm_net:
+        ipv4_address: 172.16.23.10
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    
+  primary_storage:
+    image: storage:latest
+    command: ["primary"]
+    networks:
+      dcsm_net:
+        ipv4_address: 172.16.23.11
+    volumes:
+      - primary_data:/app/primary_data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.role == primary
+      restart_policy:
+        condition: on-failure
+  
+  backup_storage:
+    image: storage:latest
+    command: ["backup"]
+    networks:
+      dcsm_net:
+        ipv4_address: 172.16.23.12
+    volumes:
+      - backup_data:/app/backup_data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.role == backup
+      restart_policy:
+        condition: on-failure
+
+networks:
+  dcsm_net:
+    driver: overlay
+    ipam:
+      config:
+        - subnet: 172.16.23.0/24
+
+volumes:
+  primary_data:
+  backup_data:
