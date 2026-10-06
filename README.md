@@ -6,106 +6,89 @@ Sistem ini dikembangkan menggunakan Python gRPC dan dilengkapi dengan jaminan ke
 
 ## Arsitektur Sistem
 
-Arsitektur terdiri dari 4 komponen utama yang saling berinteraksi:
+Arsitektur terdiri dari 4 komponen utama yang saling berinteraksi secara aman di dalam jaringan Docker Swarm:
 
-1. **Client (`client.py`)**: Bertugas melakukan *upload* dan *download* file. Menggunakan sertifikat lokal untuk autentikasi mTLS dan JWT (JSON Web Token) untuk mengirimkan label keamanan user (PUBLIC/CONFIDENTIAL/SECRET).
-2. **API Gateway (`gateway.py`)**: Bertindak sebagai pintu masuk (*entry point*). Memvalidasi sertifikat mTLS dan JWT, mencatat *Audit Log* (ALLOW/DENY), menegakkan aturan Bell-LaPadula (No Read Up), serta mengarahkan *request* ke *Storage Node*.
-3. **Primary Storage (`storage_node.py`)**: Menyimpan data di dalam lokal volume secara *persistence*, memvalidasi integritas file dengan *hash* SHA-256, dan mereplikasi data secara sinkron ke *Backup Storage*.
-4. **Backup Storage (`storage_node.py`)**: Berjalan dalam mode *backup*. Menerima replikasi dari *Primary* dan menjadi tujuan *fallback* (pengganti) apabila *Primary Node* sedang *offline*.
-
-Infrastruktur dideploy menggunakan **Docker Swarm** dengan mode *overlay network* agar masing-masing *service* terisolasi dan berkomunikasi secara internal.
+1. **Client (`client.py`)**: Bertugas melakukan permintaan *upload* dan *download* file. Klien menggunakan sertifikat lokal untuk autentikasi mTLS dan menyertakan JWT (JSON Web Token) yang berisi label keamanan pengguna (PUBLIC, CONFIDENTIAL, atau SECRET).
+2. **API Gateway (`gateway.py`)**: Berfungsi sebagai pintu masuk utama. Gateway memvalidasi sertifikat mTLS dan JWT klien, mencatat setiap aktivitas ke dalam *Audit Log* (ALLOW/DENY), menegakkan aturan Bell-LaPadula (*No Read Up*), serta merutekan *request* ke *Storage Node* yang tepat.
+3. **Primary Storage (`storage_node.py`)**: Node penyimpanan utama yang menyimpan data di dalam volume lokal secara persisten. Node ini juga memvalidasi *hash* SHA-256 untuk menjamin integritas file, serta secara otomatis mereplikasi data secara sinkron ke *Backup Storage*.
+4. **Backup Storage (`storage_node.py`)**: Berjalan dalam mode siaga (*backup*). Menyimpan salinan data dari *Primary* dan otomatis melayani klien sebagai *fallback* apabila *Primary Node* mengalami gangguan atau *offline*.
 
 ---
 
-## Cara Menjalankan (Deployment)
+## Skenario Pengujian (Test Cases)
 
-Proyek ini dapat di-deploy secara instan ke dalam Docker Swarm menggunakan file `docker-compose.yaml`.
+Berikut adalah perintah operasional untuk memvalidasi pemenuhan Test Case (TC-01 hingga TC-06). Anda dapat menyalin baris perintah di bawah ini secara berurutan.
 
+### TC-01: Upload File Otentik
+**Tujuan:** Memastikan upload sah berhasil disimpan di Primary, tereplikasi ke Backup, dan tercatat "ALLOW" di Audit Log Gateway.
 ```bash
-# Inisiasi swarm (jika belum)
-docker swarm init
-
-# Berikan label pada node (sesuaikan nama node)
-docker node update --label-add role=primary <nama-node-vm-2>
-docker node update --label-add role=backup <nama-node-vm-3>
-
-# Deploy stack
-docker stack deploy -c docker-compose.yaml dcsm_stack
-```
-
-# TC-01: Upload file otentik oleh user berwenang
-
-# 1. Buat file teks kecil untuk pengujian
 echo "Ini adalah file test TC-01" > file_tc01.txt
 
-# 2. Upload file ke sistem (Otomatis masuk Primary & replikasi ke Backup)
 python client.py upload file_tc01.txt --doc_label PUBLIC --user alice --user_label PUBLIC
-
-
-# TC-02: Akses file bertingkat (Bell-LaPadula violation)
-
-# 1. Buat file dokumen sangat rahasia
+```
+### TC-02: Pelanggaran Akses (Bell-LaPadula Violation)
+**Tujuan:** Memastikan aturan No Read Up berjalan. User dengan label Public akan ditolak saat membaca dokumen Secret.
+```bash
 echo "Ini dokumen sangat rahasia" > file_rahasia.txt
 
-# 2. Upload file dengan label SECRET oleh user SECRET
-# -> CATAT UUID/FILE_ID YANG MUNCUL DI TERMINAL!
+# 1. Upload dokumen sebagai SECRET (CATAT UUID/FILE_ID DARI HASIL PERINTAH INI)
 python client.py upload file_rahasia.txt --doc_label SECRET --user admin --user_label SECRET
 
-# 3. Coba download dengan user PUBLIC (Ganti <FILE_ID_RAHASIA> dengan UUID dari langkah 2)
-python client.py download <FILE_ID_RAHASIA> --user bob --user_label PUBLIC
-
-
-# TC-03: Pengujian Integritas File (SHA-256)
-
-# 1. Upload file pengujian integritas[cite: 6]
+# 2. Coba download menggunakan user tingkat PUBLIC (Ganti <FILE_ID> dengan UUID di atas)
+python client.py download <FILE_ID> --user bob --user_label PUBLIC
+```
+### TC-03: Pengujian Integritas File (SHA-256)
+**Tujuan:** Mendeteksi perubahan file ilegal (tampering) langsung di media penyimpanan.
+```bash
 echo "File tes integritas" > file_integritas.txt
+
+# 1. Upload file normal (CATAT UUID/FILE_ID)
 python client.py upload file_integritas.txt --doc_label PUBLIC --user alice --user_label PUBLIC
 
-# 2. LANGKAH MANUAL: Buka VM 2 (Primary Node)
-# Masuk ke direktori volume primary_data/objects/ dan ubah secara paksa isi file bin tersebut)
-# Contoh: echo "data dirusak" > /var/lib/docker/volumes/dcsm_stack_primary_data/_data/objects/<FILE_ID>.bin
+# 2. LAKUKAN MANUAL: Masuk ke VM 2 (Primary), buka direktori volume primary_data/objects/
+# dan edit isi file <FILE_ID>.bin menggunakan teks editor. Simpan perubahan.
 
-# 3. Coba download kembali file yang sudah dirusak tersebut (Ganti <FILE_ID_INTEGRITAS>)
-python client.py download <FILE_ID_INTEGRITAS> --user alice --user_label PUBLIC
-
-
-# TC-04: Uji Keamanan mTLS
-
-# 1. Ubah nama sertifikat klien agar tidak terbaca / tidak valid
+# 3. Coba download file yang telah dirusak tersebut
+python client.py download <FILE_ID> --user alice --user_label PUBLIC
+```
+### TC-04: Uji Keamanan mTLS
+**Tujuan:** Memastikan koneksi tanpa sertifikat klien yang sah akan ditolak oleh sistem.
+```bash
+# 1. Ubah nama sertifikat klien agar terbaca tidak valid
 mv certs/client.crt certs/client.crt.backup
 
-# 2. Coba jalankan upload, koneksi harusnya ditolak oleh Gateway
+# 2. Eksekusi upload (Koneksi akan langsung ditolak/error di tahap SSL Handshake)
 python client.py upload file_tc01.txt --doc_label PUBLIC --user alice --user_label PUBLIC
 
-# 3. Kembalikan nama sertifikat seperti semula agar bisa lanjut tes
+# 3. Kembalikan nama sertifikat seperti semula
 mv certs/client.crt.backup certs/client.crt
+```
+### TC-05: Node Failover / Backup Sync
+**Tujuan:** Memastikan ketersediaan layanan (fault tolerance). Saat Primary offline, klien tetap dapat mengunduh file dari Backup.
+```bash
+echo "File tes failover" > file_failover.txt
 
-
-# TC-05: Node Failover / Backup Sync
-
-# 1. Buat dan upload file baru saat Primary masih hidup
-echo "File untuk tes failover" > file_failover.txt
+# 1. Upload file saat sistem berjalan normal (CATAT UUID/FILE_ID)
 python client.py upload file_failover.txt --doc_label PUBLIC --user alice --user_label PUBLIC
 
-# 2. Matikan Primary Storage di Docker Swarm (Jalankan di VM 1 / Manager)
+# 2. Matikan Primary Storage (Jalankan perintah ini di Node Manager Swarm)
 docker service scale dcsm_stack_primary_storage=0
 
-# 3. Tunggu jeda jaringan Docker Swarm (15 detik), lalu lakukan download (Ganti <FILE_ID_FAILOVER>)
-sleep 15
-python client.py download <FILE_ID_FAILOVER> --user alice --user_label PUBLIC
+# 3. Tunggu 10-15 detik, lalu coba unduh (Akan tercatat source_backup di Gateway log)
+python client.py download <FILE_ID> --user alice --user_label PUBLIC
 
-# 4. Kembalikan Primary Storage ke kondisi semula
+# 4. Kembalikan Primary Storage untuk operasional normal
 docker service scale dcsm_stack_primary_storage=1
-
-
-# TC-06: Automated Deployment Test
-
-# 1. Bersihkan environment sebelumnya
+```
+### TC-06: Automated Deployment Test
+**Tujuan:** Memastikan seluruh sistem dan container dapat diluncurkan secara otomatis dan siap dalam waktu kurang dari 3 menit.
+```bash
+# 1. Hapus stack environment sebelumnya (jika ada)
 docker stack rm dcsm_stack
-sleep 10 # Tunggu hingga container benar-benar terhapus
 
-# 2. Deploy ulang seluruh arsitektur secara otomatis
+# 2. Deploy ulang seluruh arsitektur menggunakan compose
 docker stack deploy -c docker-compose.yaml dcsm_stack
 
-# 3. Cek status deployment, harus mencapai replicas 1/1 dalam < 3 menit
+# 3. Cek status container, pastikan kolom REPLICAS menjadi 1/1
 docker service ls
+```
